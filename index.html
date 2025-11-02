@@ -265,6 +265,7 @@
 				image-rendering: pixelated;
 			}
 			.board {
+				touch-action: manipulation;
 				display: grid;
 				aspect-ratio: 1 / 1;
 				grid-template-columns: repeat(10, 1fr);
@@ -308,9 +309,10 @@
 			}
 			.action-button {
 				font-size: 7vmin;
+				appearance: none;
 			}
 			.failed {
-				background-color: red;
+				border-color: red;
 			}
 		</style>
 	</head>
