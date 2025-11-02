@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1.0"
+		/>
+		<title>block blaster</title>
+		<script type="module">
+			const ctx = document
+				.getElementById("master")
+				.getContext("2d");
+			const hitbox = document.getElementById("hitbox");
+			let pendingStroke = 0n;
+			let gameState = 0n;
+			const params = new URLSearchParams(location.search);
+			const state = params.get("state");
+			if (state !== null) {
+				const buffer = Uint8Array.fromBase64(state);
+				gameState = new DataView(buffer.buffer).getBigUint64(0);
+			}
+			const editHistory = [gameState];
+			let editCursor = 0;
+			const events = [];
+			const masks = Array.from(
+				{ length: 8 },
+				(_, i) => 255n << BigInt(8 * i)
+			).concat(
+				Array.from(
+					{ length: 8 },
+					(_, i) =>
+						0x0101010101010101n << BigInt(i)
+				)
+			);
+			hitbox.addEventListener("pointerdown", (event) => {
+				const hitIndex = hitTest(
+					event.clientX,
+					event.clientY
+				);
+				if (hitIndex >= 0 && hitIndex < 64) {
+					pendingStroke = 1n << BigInt(hitIndex);
+					events.push([
+						event.clientX,
+						event.clientY,
+					]);
+					update();
+				}
+			});
+			hitbox.addEventListener("pointermove", (event) => {
+				const lastEvent = events.pop();
+				if (lastEvent) {
+					interpolate(lastEvent, [
+						event.clientX,
+						event.clientY,
+					]);
+					events.push([
+						event.clientX,
+						event.clientY,
+					]);
+					update();
+				}
+			});
+			hitbox.addEventListener("pointercancel", (event) => {
+				conclude(true);
+				update();
+			});
+			addEventListener("pointerup", (event) => {
+				const lastEvent = events.pop();
+				if (lastEvent) {
+					interpolate(lastEvent, [
+						event.clientX,
+						event.clientY,
+					]);
+					conclude();
+					update();
+				}
+			});
+			function conclude(cancel = false) {
+				if (!cancel) {
+					if (pendingStroke & ~gameState) {
+						gameState |= pendingStroke;
+						pushState();
+					} else {
+						gameState &= ~pendingStroke;
+						pushState();
+					}
+				}
+				pendingStroke = 0n;
+				events.splice(0, events.length);
+			}
+			function interpolate([x1, y1], [x2, y2]) {
+				const dx = x2 - x1;
+				const dy = y2 - y1;
+				let normal = Math.sqrt(dx * dx + dy * dy);
+				if (normal === 0) {
+					normal = 1;
+				}
+				for (let t = 0; t <= normal; t += 0.1) {
+					const hitIndex = hitTest(
+						x1 + (t / normal) * dx,
+						y1 + (t / normal) * dy
+					);
+					if (hitIndex >= 0 && hitIndex < 64) {
+						pendingStroke |=
+							1n << BigInt(hitIndex);
+					}
+				}
+			}
+			function hitTest(x, y) {
+				const hitArea = document.elementFromPoint(x, y);
+				const hitIndex = [].indexOf.call(
+					hitbox.children,
+					hitArea
+				);
+				return hitIndex;
+			}
+			function update() {
+				ctx.clearRect(0, 0, 8, 8);
+				for (let i = 0; i < 8; i++) {
+					for (let j = 0; j < 8; j++) {
+						ctx.fillStyle = "midnightblue";
+						const c =
+							1n << BigInt(i * 8 + j);
+						if (gameState & c) {
+							ctx.fillStyle = "red";
+							if (
+								masks
+									.filter(
+										(
+											mask
+										) =>
+											(mask &
+												gameState) ===
+											mask
+									)
+									.some(
+										(
+											mask
+										) =>
+											mask &
+											c
+									)
+							) {
+								ctx.fillStyle =
+									"magenta";
+							}
+						}
+						if (pendingStroke & c) {
+							ctx.fillStyle =
+								"skyblue";
+						}
+						ctx.fillRect(j, i, 1, 1);
+					}
+				}
+			}
+			update();
+
+			function pushState() {
+				if (gameState !== editHistory[editCursor]) {
+					editHistory[++editCursor] = gameState;
+				}
+			}
+
+			const actions = {};
+
+			function registerAction(name, fn) {
+				actions[name] = fn;
+			}
+
+			registerAction("blast", () => {
+				const mask = masks
+					.filter(
+						(mask) =>
+							(mask & gameState) ===
+							mask
+					)
+					.reduce(
+						(initial, mask) =>
+							initial | mask,
+						0n
+					);
+				if (mask === 0n) {
+					return false;
+				}
+				gameState ^= mask;
+				pushState();
+				update();
+				return true;
+			});
+
+			registerAction("undo", () => {
+				editCursor--;
+				if (editCursor < 0) {
+					editCursor = 0;
+					return false;
+				}
+				gameState = editHistory[editCursor];
+				update();
+				return true;
+			});
+			registerAction("redo", () => {
+				editCursor++;
+				if (editCursor > editHistory.length - 1) {
+					editCursor = editHistory.length - 1;
+					return false;
+				}
+				gameState = editHistory[editCursor];
+				update();
+				return true;
+			});
+			registerAction("clear", () => {
+				gameState = 0n;
+				pushState();
+				update();
+				return true;
+			});
+			registerAction("save", () => {
+				const buffer = new Uint8Array(8);
+				new DataView(buffer.buffer).setBigUint64(0, gameState);
+				const params = new URLSearchParams(location.search);
+				params.set("state", buffer.toBase64());
+				location.search = params;
+				return true;
+			});
+
+			document.querySelectorAll("[data-action]").forEach(
+				(element) => {
+					element.addEventListener(
+						"click",
+						() => {
+							const result =
+								actions[
+									element
+										.dataset
+										.action
+								]();
+							if (
+								(typeof result ===
+									"number" &&
+									result <
+										0) ||
+								!result
+							) {
+								element.classList.add(
+									"failed"
+								);
+								clearTimeout(element._resetColorId);
+								element._resetColorId = setTimeout(
+									() => {
+										element.classList.remove(
+											"failed"
+										);
+									},
+									1000
+								);
+							}
+						}
+					);
+				}
+			);
+		</script>
+		<style>
+			.pixel {
+				image-rendering: pixelated;
+			}
+			.board {
+				display: grid;
+				aspect-ratio: 1 / 1;
+				grid-template-columns: repeat(10, 1fr);
+				grid-template-rows: repeat(10, 1fr);
+			}
+			.flood,
+			.hit-board {
+				grid-column: 1 / span 9;
+				grid-row: 1 / span 9;
+			}
+			.flood {
+				display: block;
+				height: 100%;
+				z-index: 1;
+			}
+			@media (orientation: landscape) {
+				.board {
+					height: 100%;
+					margin: auto;
+				}
+			}
+			@media (orientation: portrait) {
+				.board {
+					width: 100%;
+				}
+			}
+			html,
+			body {
+				height: 100%;
+			}
+			* {
+				margin: 0;
+				padding: 0;
+			}
+			.hit-board {
+				touch-action: none;
+				display: grid;
+				z-index: 2;
+				grid-template-columns: repeat(8, 1fr);
+				grid-template-rows: repeat(8, 1fr);
+			}
+			.action-button {
+				font-size: 7vmin;
+			}
+			.failed {
+				background-color: red;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="board" class="board">
+			<button
+				type="button"
+				aria-label="blast rows and columns"
+				class="action-button"
+				data-action="blast"
+			>
+				💥
+			</button>
+			<button
+				type="button"
+				aria-label="undo"
+				class="action-button"
+				data-action="undo"
+			>
+				↩️
+			</button>
+			<button
+				type="button"
+				aria-label="redo"
+				class="action-button"
+				data-action="redo"
+			>
+				↪️
+			</button>
+			<button
+				type="button"
+				aria-label="clear"
+				class="action-button"
+				data-action="clear"
+			>
+				🗑️
+			</button>
+			<!-- <button
+				type="button"
+				aria-label="receive permalink"
+				class="action-button"
+				data-action="save"
+			>
+				🔗
+			</button> -->
+			<canvas
+				id="master"
+				class="pixel flood"
+				width="8"
+				height="8"
+			></canvas>
+			<div id="hitbox" class="hit-board">
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+				<div class="hit-area"></div>
+			</div>
+		</div>
+	</body>
+</html>
