@@ -271,12 +271,12 @@
 				grid-template-columns: repeat(10, 1fr);
 				grid-template-rows: repeat(10, 1fr);
 			}
-			.flood,
+			.grow,
 			.hit-board {
 				grid-column: 1 / span 9;
 				grid-row: 1 / span 9;
 			}
-			.flood {
+			.grow {
 				display: block;
 				height: 100%;
 				z-index: 1;
@@ -301,6 +301,8 @@
 				padding: 0;
 			}
 			.hit-board {
+				-webkit-user-select: none;
+				cursor: crosshair;
 				touch-action: none;
 				display: grid;
 				z-index: 2;
@@ -360,7 +362,7 @@
 			</button> -->
 			<canvas
 				id="master"
-				class="pixel flood"
+				class="pixel grow"
 				width="8"
 				height="8"
 			></canvas>
